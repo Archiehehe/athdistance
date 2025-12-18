@@ -56,21 +56,14 @@ def fetch_price_history(ticker: str, period: str = "max") -> pd.DataFrame:
     """
     Fetch daily price history for a ticker using yfinance.
 
-    Args:
-        ticker: Ticker symbol.
-        period: yfinance period string (e.g., '1y', '5y', 'max').
-
-    Returns:
-        DataFrame with at least 'Price' column.
-
-    Raises:
-        ValueError if no data is returned.
+    IMPORTANT: We use unadjusted High/Low/Close (auto_adjust=False) so that
+    ATH and 52-week highs match chart-style prices, not dividend-adjusted series.
     """
     data = yf.download(
         ticker,
         period=period,
         interval="1d",
-        auto_adjust=True,  # Adjust for splits/dividends
+        auto_adjust=False,  # <-- critical for correct ATH
         progress=False,
         threads=False,
     )
@@ -78,42 +71,48 @@ def fetch_price_history(ticker: str, period: str = "max") -> pd.DataFrame:
     if data.empty:
         raise ValueError("No historical data returned")
 
-    # Normalize to a generic 'Price' column
-    if "Adj Close" in data.columns:
-        price_series = data["Adj Close"]
-    elif "Close" in data.columns:
-        price_series = data["Close"]
-    else:
-        raise ValueError("No suitable price column found")
+    # We want split-adjusted but not dividend-adjusted High/Low/Close
+    needed_cols = ["Close", "High", "Low"]
+    for col in needed_cols:
+        if col not in data.columns:
+            raise ValueError(f"Missing {col} column in price history")
 
-    df = data.copy()
-    df["Price"] = price_series
+    df = data[needed_cols].copy()
+    df = df.dropna(subset=["Close", "High", "Low"])
+
+    if df.empty:
+        raise ValueError("No valid OHLC data after dropping NaNs")
+
     return df
 
 
 def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
     """
-    Given a historical price DataFrame, compute ATH, 52-week metrics, etc.
+    Given a historical price DataFrame with 'Close', 'High', 'Low',
+    compute ATH, 52-week metrics, etc.
 
-    Args:
-        history: DataFrame returned by fetch_price_history() with 'Price' column.
-
-    Returns:
-        Dict of metrics.
+    ATH and 52-week high/low are based on the unadjusted High/Low series
+    (split-adjusted but NOT dividend-adjusted), matching typical chart behavior.
     """
-    price = history["Price"].dropna()
-    if price.empty:
-        raise ValueError("Price series is empty")
+    if not {"Close", "High", "Low"}.issubset(set(history.columns)):
+        raise ValueError("History DataFrame must contain Close, High, Low columns")
 
-    # All-Time High
-    ath = float(price.max())
-    current_price = float(price.iloc[-1])
+    close = history["Close"].dropna()
+    high = history["High"].dropna()
+    low = history["Low"].dropna()
+
+    if close.empty or high.empty or low.empty:
+        raise ValueError("Insufficient OHLC data to compute metrics")
+
+    # All-Time High based on daily High
+    ath = float(high.max())
+    current_price = float(close.iloc[-1])
 
     # 52-week window ~ 252 trading days
-    window_len = min(252, len(price))
-    last_52w = price.tail(window_len)
-    high_52w = float(last_52w.max())
-    low_52w = float(last_52w.min())
+    window_len = min(252, len(history))
+    last_52w = history.tail(window_len)
+    high_52w = float(last_52w["High"].max())
+    low_52w = float(last_52w["Low"].min())
 
     # Distance from ATH (as per spec)
     # (Current Price - ATH) / ATH * 100
@@ -129,7 +128,7 @@ def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
     else:
         range_52w_pct = np.nan
 
-    # NEW: Distance from 52W High (%)
+    # Distance from 52W High (%)
     # (Current Price - 52W High) / 52W High * 100
     if high_52w > 0:
         distance_from_52w_high_pct = (current_price - high_52w) / high_52w * 100.0
