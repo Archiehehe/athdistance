@@ -1,4 +1,4 @@
-import datetime as dt
+import math
 from typing import Dict, List, Tuple, Any
 
 import numpy as np
@@ -56,11 +56,9 @@ def fetch_price_history(ticker: str, period: str = "max") -> pd.DataFrame:
     """
     Fetch daily price history for a ticker using yfinance.
 
-    IMPORTANT:
     - auto_adjust=False so we get unadjusted OHLC (dividends not back-adjusted),
       which is what you want for chart-style ATH.
-    - We then build a DataFrame with Close/High/Low, falling back to Adj Close
-      if necessary, instead of failing hard.
+    - We return the raw yfinance DataFrame and handle fallbacks later.
     """
     data = yf.download(
         ticker,
@@ -74,52 +72,56 @@ def fetch_price_history(ticker: str, period: str = "max") -> pd.DataFrame:
     if data.empty:
         raise ValueError("No historical data returned")
 
-    # yfinance usually gives: Open, High, Low, Close, Adj Close, Volume
-    # But to be robust, we construct Close/High/Low with fallbacks.
+    return data
 
-    def get_series(preferred: str, fallback: str = None) -> pd.Series:
-        if preferred in data.columns:
-            return data[preferred]
-        if fallback and fallback in data.columns:
-            return data[fallback]
-        # last resort: use any available price-like column
-        for alt in ["Adj Close", "Close", "High", "Low", "Open"]:
-            if alt in data.columns:
-                return data[alt]
-        raise ValueError(f"No suitable column found for {preferred}")
 
-    close = get_series("Close", fallback="Adj Close")
-    high = get_series("High", fallback="Close")
-    low = get_series("Low", fallback="Close")
+def _get_price_series(
+    history: pd.DataFrame, primary: str, fallbacks: List[str]
+) -> pd.Series:
+    """
+    Get a price series from history, trying primary first, then fallbacks.
+    """
+    if primary in history.columns:
+        s = history[primary]
+        if not s.dropna().empty:
+            return s
 
-    df = pd.DataFrame(
-        {
-            "Close": close,
-            "High": high,
-            "Low": low,
-        }
-    ).dropna(subset=["Close", "High", "Low"])
+    for col in fallbacks:
+        if col in history.columns:
+            s = history[col]
+            if not s.dropna().empty:
+                return s
 
-    if df.empty:
-        raise ValueError("No valid OHLC data after dropping NaNs")
-
-    return df
+    raise ValueError(f"No suitable series found for {primary} with fallbacks {fallbacks}")
 
 
 def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
     """
-    Given a historical price DataFrame with 'Close', 'High', 'Low',
-    compute ATH, 52-week metrics, etc.
+    Given a historical price DataFrame, compute ATH, 52-week metrics, etc.
 
     ATH and 52-week high/low are based on the (split-adjusted but not
-    dividend-adjusted) High/Low series, matching typical chart behavior.
+    dividend-adjusted) High/Low series where available, matching typical chart behavior.
     """
-    if not {"Close", "High", "Low"}.issubset(set(history.columns)):
-        raise ValueError("History DataFrame must contain Close, High, Low columns")
 
-    close = history["Close"].dropna()
-    high = history["High"].dropna()
-    low = history["Low"].dropna()
+    # Close: prefer Close, then Adj Close, then High/Low/Open
+    close = _get_price_series(
+        history,
+        "Close",
+        fallbacks=["Adj Close", "High", "Low", "Open"],
+    ).dropna()
+
+    # High / Low: prefer High/Low, fall back to Close
+    high = _get_price_series(
+        history,
+        "High",
+        fallbacks=["Close", "Adj Close"],
+    ).dropna()
+
+    low = _get_price_series(
+        history,
+        "Low",
+        fallbacks=["Close", "Adj Close"],
+    ).dropna()
 
     if close.empty or high.empty or low.empty:
         raise ValueError("Insufficient OHLC data to compute metrics")
@@ -131,8 +133,21 @@ def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
     # 52-week window ~ 252 trading days
     window_len = min(252, len(history))
     last_52w = history.tail(window_len)
-    high_52w = float(last_52w["High"].max())
-    low_52w = float(last_52w["Low"].min())
+
+    high_52w = _get_price_series(
+        last_52w,
+        "High",
+        fallbacks=["Close", "Adj Close"],
+    ).max()
+
+    low_52w = _get_price_series(
+        last_52w,
+        "Low",
+        fallbacks=["Close", "Adj Close"],
+    ).min()
+
+    high_52w = float(high_52w)
+    low_52w = float(low_52w)
 
     # Distance from ATH (as per spec)
     # (Current Price - ATH) / ATH * 100
