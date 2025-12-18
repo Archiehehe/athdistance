@@ -11,7 +11,7 @@ import yfinance as yf
 # Streamlit page config
 # ------------------------------------------------------------
 st.set_page_config(
-    page_title="US Stock Screener (yfinance)",
+    page_title="S&P 500 Stock Screener",
     page_icon="📈",
     layout="wide",
 )
@@ -129,6 +129,13 @@ def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
     else:
         range_52w_pct = np.nan
 
+    # NEW: Distance from 52W High (%)
+    # (Current Price - 52W High) / 52W High * 100
+    if high_52w > 0:
+        distance_from_52w_high_pct = (current_price - high_52w) / high_52w * 100.0
+    else:
+        distance_from_52w_high_pct = np.nan
+
     return {
         "Current Price": current_price,
         "ATH": ath,
@@ -136,6 +143,7 @@ def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
         "52W High": high_52w,
         "52W Low": low_52w,
         "52W Range (%)": range_52w_pct,
+        "Distance From 52W High (%)": distance_from_52w_high_pct,
     }
 
 
@@ -161,7 +169,7 @@ st.sidebar.title("⚙️ Screener Controls")
 
 with st.sidebar:
     st.markdown("### Stock Universe")
-    st.caption("Using tickers defined in **universe.csv** as the default universe.")
+    st.caption("Using S&P 500 tickers defined in **universe.csv** as the default universe.")
 
 # Sector selector (single select)
 sector_options = ["All Sectors"] + sorted(universe_df["Sector"].dropna().unique().tolist())
@@ -220,14 +228,14 @@ run_screener = st.sidebar.button("🔍 Run Screener")
 # ------------------------------------------------------------
 # Main layout
 # ------------------------------------------------------------
-st.title("📈 US Stock Screener (yfinance)")
+st.title("📈 S&P 500 Stock Screener (ATH & 52-Week)")
+
 st.caption(
-    "A simple Streamlit stock screener using Yahoo Finance (`yfinance`) and a predefined ticker universe "
-    "stored in `universe.csv`. Educational use only — **not investment advice**."
+    "S&P 500 stock screener using Yahoo Finance (`yfinance`) and a predefined S&P 500 universe stored in `universe.csv`."
 )
 
 st.markdown(
-    f"**Universe size:** {len(universe_df)} tickers  •  "
+    f"**S&P 500 universe:** {len(universe_df)} tickers  •  "
     f"After filters: {len(final_universe)} tickers"
 )
 
@@ -334,7 +342,11 @@ df_show = df_show.sort_values(by="Distance From ATH (%)", ascending=False)
 
 # Round numeric columns for display
 price_cols = ["Current Price", "ATH", "52W High", "52W Low"]
-pct_cols = ["Distance From ATH (%)", "52W Range (%)"]
+pct_cols = [
+    "Distance From ATH (%)",
+    "52W Range (%)",
+    "Distance From 52W High (%)",
+]
 
 for col in price_cols:
     if col in df_show.columns:
@@ -362,6 +374,7 @@ st.dataframe(
             "52W High",
             "52W Low",
             "52W Range (%)",
+            "Distance From 52W High (%)",
         ]
     ],
     use_container_width=True,
