@@ -1,5 +1,5 @@
 import datetime as dt
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -56,14 +56,17 @@ def fetch_price_history(ticker: str, period: str = "max") -> pd.DataFrame:
     """
     Fetch daily price history for a ticker using yfinance.
 
-    IMPORTANT: We use unadjusted High/Low/Close (auto_adjust=False) so that
-    ATH and 52-week highs match chart-style prices, not dividend-adjusted series.
+    IMPORTANT:
+    - auto_adjust=False so we get unadjusted OHLC (dividends not back-adjusted),
+      which is what you want for chart-style ATH.
+    - We then build a DataFrame with Close/High/Low, falling back to Adj Close
+      if necessary, instead of failing hard.
     """
     data = yf.download(
         ticker,
         period=period,
         interval="1d",
-        auto_adjust=False,  # <-- critical for correct ATH
+        auto_adjust=False,
         progress=False,
         threads=False,
     )
@@ -71,14 +74,31 @@ def fetch_price_history(ticker: str, period: str = "max") -> pd.DataFrame:
     if data.empty:
         raise ValueError("No historical data returned")
 
-    # We want split-adjusted but not dividend-adjusted High/Low/Close
-    needed_cols = ["Close", "High", "Low"]
-    for col in needed_cols:
-        if col not in data.columns:
-            raise ValueError(f"Missing {col} column in price history")
+    # yfinance usually gives: Open, High, Low, Close, Adj Close, Volume
+    # But to be robust, we construct Close/High/Low with fallbacks.
 
-    df = data[needed_cols].copy()
-    df = df.dropna(subset=["Close", "High", "Low"])
+    def get_series(preferred: str, fallback: str = None) -> pd.Series:
+        if preferred in data.columns:
+            return data[preferred]
+        if fallback and fallback in data.columns:
+            return data[fallback]
+        # last resort: use any available price-like column
+        for alt in ["Adj Close", "Close", "High", "Low", "Open"]:
+            if alt in data.columns:
+                return data[alt]
+        raise ValueError(f"No suitable column found for {preferred}")
+
+    close = get_series("Close", fallback="Adj Close")
+    high = get_series("High", fallback="Close")
+    low = get_series("Low", fallback="Close")
+
+    df = pd.DataFrame(
+        {
+            "Close": close,
+            "High": high,
+            "Low": low,
+        }
+    ).dropna(subset=["Close", "High", "Low"])
 
     if df.empty:
         raise ValueError("No valid OHLC data after dropping NaNs")
@@ -91,8 +111,8 @@ def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
     Given a historical price DataFrame with 'Close', 'High', 'Low',
     compute ATH, 52-week metrics, etc.
 
-    ATH and 52-week high/low are based on the unadjusted High/Low series
-    (split-adjusted but NOT dividend-adjusted), matching typical chart behavior.
+    ATH and 52-week high/low are based on the (split-adjusted but not
+    dividend-adjusted) High/Low series, matching typical chart behavior.
     """
     if not {"Close", "High", "Low"}.issubset(set(history.columns)):
         raise ValueError("History DataFrame must contain Close, High, Low columns")
@@ -262,7 +282,7 @@ if len(final_universe) > max_tickers:
 # ------------------------------------------------------------
 # Compute metrics for each ticker (with progress bar & error logging)
 # ------------------------------------------------------------
-results: List[Dict] = []
+results: List[Dict[str, Any]] = []
 errors: List[Tuple[str, str]] = []
 
 progress_text = "Downloading data and computing metrics..."
