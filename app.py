@@ -21,33 +21,34 @@ st.set_page_config(
 # Data loading & caching helpers
 # ------------------------------------------------------------
 @st.cache_data(show_spinner=True)
-def load_sp500_universe() -> pd.DataFrame:
+def load_universe() -> pd.DataFrame:
     """
-    Load S&P 500 constituents from Wikipedia.
+    Load stock universe from a local CSV file (universe.csv).
 
-    Returns:
-        DataFrame with columns: Ticker, Company, Sector, Industry
+    The CSV must be in the same folder as app.py with columns:
+      - Ticker
+      - Company
+      - Sector
+      - Industry
     """
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tables = pd.read_html(url)
-    constituents = tables[0]
+    try:
+        df = pd.read_csv("universe.csv")
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            "universe.csv not found. Make sure it exists in the same folder as app.py."
+        )
 
-    constituents = constituents.rename(
-        columns={
-            "Symbol": "Ticker",
-            "Security": "Company",
-            "GICS Sector": "Sector",
-            "GICS Sub-Industry": "Industry",
-        }
+    required_cols = ["Ticker", "Company", "Sector", "Industry"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"universe.csv is missing required columns: {missing}")
+
+    # Clean up tickers
+    df["Ticker"] = (
+        df["Ticker"].astype(str).str.strip().str.upper().str.replace(".", "-", regex=False)
     )
 
-    # Keep only relevant columns
-    df = constituents[["Ticker", "Company", "Sector", "Industry"]].copy()
-
-    # yfinance uses "-" instead of "." for share classes (e.g., BRK.B -> BRK-B)
-    df["Ticker"] = df["Ticker"].str.replace(".", "-", regex=False)
-
-    return df
+    return df[required_cols].copy()
 
 
 @st.cache_data(show_spinner=False)
@@ -139,15 +140,28 @@ def compute_price_metrics(history: pd.DataFrame) -> Dict[str, float]:
 
 
 # ------------------------------------------------------------
+# Load universe (from CSV) with friendly error message
+# ------------------------------------------------------------
+try:
+    universe_df = load_universe()
+except Exception as e:
+    st.error(
+        "❌ Could not load the stock universe.\n\n"
+        "Make sure there is a file called **universe.csv** in the same GitHub repo, "
+        "with columns: `Ticker,Company,Sector,Industry`.\n\n"
+        f"Technical details: {e}"
+    )
+    st.stop()
+
+
+# ------------------------------------------------------------
 # Sidebar: universe, filters, and controls
 # ------------------------------------------------------------
 st.sidebar.title("⚙️ Screener Controls")
 
 with st.sidebar:
     st.markdown("### Stock Universe")
-    st.caption("Using **S&P 500** constituents as the default universe.")
-
-universe_df = load_sp500_universe()
+    st.caption("Using tickers defined in **universe.csv** as the default universe.")
 
 # Sector selector (dynamic)
 sector_options = ["All Sectors"] + sorted(universe_df["Sector"].dropna().unique().tolist())
@@ -201,8 +215,8 @@ run_screener = st.sidebar.button("🔍 Run Screener")
 # ------------------------------------------------------------
 st.title("📈 US Stock Screener (yfinance)")
 st.caption(
-    "A simple Streamlit stock screener for S&P 500 stocks using Yahoo Finance (`yfinance`). "
-    "Educational use only — **not investment advice**."
+    "A simple Streamlit stock screener using Yahoo Finance (`yfinance`) and a predefined ticker universe "
+    "stored in `universe.csv`. Educational use only — **not investment advice**."
 )
 
 st.markdown(
