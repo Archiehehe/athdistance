@@ -163,7 +163,7 @@ with st.sidebar:
     st.markdown("### Stock Universe")
     st.caption("Using tickers defined in **universe.csv** as the default universe.")
 
-# Sector selector (dynamic)
+# Sector selector (single select)
 sector_options = ["All Sectors"] + sorted(universe_df["Sector"].dropna().unique().tolist())
 selected_sector = st.sidebar.selectbox("Sector", sector_options, index=0)
 
@@ -172,20 +172,27 @@ if selected_sector != "All Sectors":
 else:
     universe_filtered_sector = universe_df.copy()
 
-# Industry selector (dependent on sector selection)
-industry_options = ["All Industries"] + sorted(
+# Industry selector (MULTISELECT, dependent on sector selection)
+industry_options = sorted(
     universe_filtered_sector["Industry"].dropna().unique().tolist()
 )
-selected_industry = st.sidebar.selectbox("Industry", industry_options, index=0)
 
-if selected_industry != "All Industries":
+selected_industries = st.sidebar.multiselect(
+    "Industry (you can pick multiple)",
+    options=industry_options,
+    default=industry_options,  # all selected by default
+    help="Select one or more industries within the chosen sector.",
+)
+
+if selected_industries:
     final_universe = universe_filtered_sector[
-        universe_filtered_sector["Industry"] == selected_industry
+        universe_filtered_sector["Industry"].isin(selected_industries)
     ].copy()
 else:
+    # If nothing selected, treat as 'all industries'
     final_universe = universe_filtered_sector.copy()
 
-# Optional: slider to filter by distance from ATH
+# Distance from ATH slider
 st.sidebar.markdown("### Distance from ATH Filter")
 distance_min, distance_max = st.sidebar.slider(
     "Distance from ATH (%) (Current - ATH) / ATH × 100",
@@ -196,13 +203,13 @@ distance_min, distance_max = st.sidebar.slider(
     help="Filter by how far the stock is from its all-time high.",
 )
 
-# Optional: limit max number of tickers to process (for performance)
+# Performance: max tickers
 st.sidebar.markdown("### Performance")
 max_tickers = st.sidebar.slider(
     "Max tickers to process",
     min_value=5,
-    max_value=100,
-    value=30,
+    max_value=200,
+    value=50,
     step=5,
     help="Limit number of tickers (after filters) to keep the screener fast.",
 )
@@ -243,6 +250,7 @@ if len(final_universe) > max_tickers:
         "Increase 'Max tickers to process' in the sidebar if needed."
     )
     final_universe = final_universe.head(max_tickers).copy()
+
 
 # ------------------------------------------------------------
 # Compute metrics for each ticker (with progress bar & error logging)
@@ -293,47 +301,56 @@ if not results:
                 st.write(f"**{t}** → {msg}")
     st.stop()
 
+
 # ------------------------------------------------------------
 # Create DataFrame and apply Distance-from-ATH filter
 # ------------------------------------------------------------
-df = pd.DataFrame(results)
+df_all = pd.DataFrame(results)
 
 # Apply distance-from-ATH slider filter
-df = df[
-    (df["Distance From ATH (%)"] >= distance_min)
-    & (df["Distance From ATH (%)"] <= distance_max)
+df_filtered = df_all[
+    (df_all["Distance From ATH (%)"] >= distance_min)
+    & (df_all["Distance From ATH (%)"] <= distance_max)
 ]
 
-if df.empty:
+# Decide what to show
+if df_filtered.empty:
     st.warning(
         "No tickers match the selected **distance from ATH** filter. "
-        "Try widening the range in the sidebar."
+        "Showing all tickers that successfully loaded instead."
     )
-    if errors:
-        with st.expander("Error log for failed tickers"):
-            for t, msg in errors:
-                st.write(f"**{t}** → {msg}")
-    st.stop()
+    df_show = df_all
+else:
+    df_show = df_filtered
+
+# Show counts
+st.markdown(
+    f"**Tickers after distance filter:** {len(df_filtered)} "
+    f"(out of {len(df_all)} successfully loaded)"
+)
 
 # Sort by Distance From ATH (%) (closest to ATH first)
-df = df.sort_values(by="Distance From ATH (%)", ascending=False)
+df_show = df_show.sort_values(by="Distance From ATH (%)", ascending=False)
 
 # Round numeric columns for display
 price_cols = ["Current Price", "ATH", "52W High", "52W Low"]
 pct_cols = ["Distance From ATH (%)", "52W Range (%)"]
 
 for col in price_cols:
-    if col in df.columns:
-        df[col] = df[col].round(2)
+    if col in df_show.columns:
+        df_show[col] = df_show[col].round(2)
 
 for col in pct_cols:
-    if col in df.columns:
-        df[col] = df[col].round(2)
+    if col in df_show.columns:
+        df_show[col] = df_show[col].round(2)
 
+# ------------------------------------------------------------
+# Display table
+# ------------------------------------------------------------
 st.subheader("Screened Stocks")
 
 st.dataframe(
-    df[
+    df_show[
         [
             "Ticker",
             "Company Name",
