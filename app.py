@@ -373,6 +373,7 @@ st.markdown(
 
 # Sort by Distance From ATH (%) (closest to ATH first)
 df_show = df_show.sort_values(by="Distance From ATH (%)", ascending=False)
+df_show = df_show.reset_index(drop=True)
 
 # Round numeric columns for display
 price_cols = ["Current Price", "ATH", "52W High", "52W Low"]
@@ -391,7 +392,7 @@ for col in pct_cols:
         df_show[col] = df_show[col].round(2)
 
 # ------------------------------------------------------------
-# Display table
+# Display table (no index / rank column)
 # ------------------------------------------------------------
 st.subheader("Screened Stocks")
 
@@ -412,6 +413,7 @@ st.dataframe(
         ]
     ],
     use_container_width=True,
+    hide_index=True,
 )
 
 # ------------------------------------------------------------
@@ -424,4 +426,4 @@ if errors:
             "This can happen due to missing or inconsistent data in Yahoo Finance."
         )
         err_df = pd.DataFrame(errors, columns=["Ticker", "Error"])
-        st.dataframe(err_df, use_container_width=True)
+        st.dataframe(err_df, use_container_width=True, hide_index=True)
