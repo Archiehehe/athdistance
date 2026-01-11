@@ -1,2 +1,2 @@
 # athdistance
-Measures ATH distance by secior, indusstry with filters
+Measures ATH distance by sector, industry with filters
